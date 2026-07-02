@@ -1,0 +1,49 @@
+import streamlit as st
+import pandas as pd
+
+st.set_page_config(page_title="IOC to AQL Generator", layout="wide")
+st.title("🛡️ SOC Hunting: IOC to AQL Generator")
+
+# Helper to format lists for AQL
+def format_list(lst):
+    return ",".join([f"'{item}'" for item in sorted(list(set(lst)))])
+
+uploaded_file = st.file_uploader("Upload your IOC file (CSV/TXT)", type=['csv', 'txt'])
+
+if uploaded_file:
+    # Read the file
+    content = uploaded_file.read().decode("utf-8")
+    
+    # Logic to categorize data based on the format: value,label
+    domains, ips, urls, md5s, sha1s, sha256s = [], [], [], [], [], []
+    
+    for line in content.strip().split('\n'):
+        if not line or ',' not in line: continue
+        val, label = [x.strip().lower() for x in line.split(',', 1)]
+        
+        if label in ['fqdn', 'domain']: domains.append(val)
+        elif label in ['ip', 'ip address']: ips.append(val)
+        elif label == 'url': urls.append(val)
+        elif label == 'md5': md5s.append(val)
+        elif label == 'sha1': sha1s.append(val)
+        elif label == 'sha256': sha256s.append(val)
+
+    # Display extracted data
+    st.subheader("Extracted Indicators")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Domains", len(domains))
+    col2.metric("IPs", len(ips))
+    col3.metric("Hashes (Total)", len(md5s) + len(sha1s) + len(sha256s))
+
+    # AQL Generators
+    st.subheader("Generated AQL Queries")
+    
+    if domains:
+        st.code(f"SELECT QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"URL HOST\" AS 'Host' FROM events WHERE \"domainId\"='3' AND (" + " OR ".join([f"\"URL HOST\" ILIKE '%{d}'" for d in domains]) + ") ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
+    
+    if md5s:
+        st.code(f"SELECT ... FROM events WHERE \"domainId\"='3' AND \"MD5 Hash\" IN ({format_list(md5s)}) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
+
+    # Repeat for other types (SHA1, SHA256, URL, IP) as needed
+    if st.button("Clear Results"):
+        st.rerun()
