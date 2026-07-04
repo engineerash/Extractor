@@ -1,6 +1,7 @@
 import streamlit as st
 from collections import defaultdict
 import os
+import pandas as pd
 
 st.set_page_config(page_title="SOC IOC Generator", layout="wide")
 st.title("🛡️ SOC Hunting: Multi-Client AQL Generator")
@@ -26,21 +27,14 @@ CONFIG = {
 }
 
 def get_chunks(vals, conf, base_query, limit=2023):
-    # Estimate the length of the IN clause or OR clause
     if conf['is_ilike']:
         full_cond = " OR ".join([f'"{conf["col"]}" ILIKE \'%{v}%\'' for v in vals])
     else:
         full_cond = f'("{conf["col"]}" IN ({",".join([f"\'{v}\'" for v in vals])}))'
     
-    # If it fits, return as one chunk
-    if len(base_query) + len(full_cond) <= limit:
-        return [vals]
-    
-    # If it DOES NOT fit and can use ref set, return ref set trigger
-    if conf['can_ref_set']:
-        return "REF_SET"
+    if len(base_query) + len(full_cond) <= limit: return [vals]
+    if conf['can_ref_set']: return "REF_SET"
         
-    # If it doesn't fit and cannot use ref set, perform the manual split
     chunks = []
     current_chunk = []
     current_length = len(base_query)
@@ -78,6 +72,15 @@ if uploaded_file:
             if result == "REF_SET":
                 st.info("Query too long. Using Reference Set instead.")
                 st.code(f"{base_query} (\"{conf['col']}\" IN REFERENCE_SET('ThreatIntel_{conf['cat']}')) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
+                
+                # --- EXPORT BUTTON ---
+                df = pd.DataFrame(vals, columns=['Value'])
+                st.download_button(
+                    label=f"📥 Export {label.upper()} to CSV for Reference Set",
+                    data=df.to_csv(index=False),
+                    file_name=f"{conf['cat']}_refset.csv",
+                    mime="text/csv"
+                )
             else:
                 for i, chunk in enumerate(result):
                     if conf['is_ilike']:
