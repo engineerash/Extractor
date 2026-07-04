@@ -1,23 +1,31 @@
 import streamlit as st
 from collections import defaultdict
 
-st.set_page_config(page_title="Multi-Client Mail IOC Generator", layout="wide")
-st.title("🛡️ SOC Hunting: Mail-Only AQL Generator")
+st.set_page_config(page_title="Multi-Client IOC Generator", layout="wide")
+st.title("🛡️ SOC Hunting: Multi-Client AQL Generator")
 
+# 1. Selection Controls
 client = st.selectbox("Select Client", ["Tarshid", "Alraedah"])
+mail_only = st.checkbox("Enable Mail-Only Mode (Filter out non-mail IOCs)")
 uploaded_file = st.file_uploader("Upload your IOC file", type=['csv', 'txt'])
 
-# --- CONFIGURE ONLY MAIL-RELATED TYPES ---
-# Add or remove types here to control what is processed
-VALID_MAIL_TYPES = ['mailsender', 'subject', 'url', 'domain']
-
+# --- DYNAMIC MAPPING CONFIGURATION ---
+# All types are here now
 CONFIG = {
     'domain': {'col': 'URL HOST', 'cat': 'Domain', 'is_ilike': True},
     'fqdn':   {'col': 'URL HOST', 'cat': 'Domain', 'is_ilike': True},
     'url':    {'col': 'URL', 'cat': 'URL', 'is_ilike': True},
     'mailsender': {'col': 'sender', 'cat': 'MailSender', 'is_ilike': True},
-    'subject':    {'col': 'subject', 'cat': 'MailSubject', 'is_ilike': True}
+    'subject':    {'col': 'subject', 'cat': 'MailSubject', 'is_ilike': True},
+    'md5':        {'col': 'MD5 Hash', 'cat': 'MD5', 'is_ilike': False},
+    'sha256':     {'col': 'SHA256 Hash', 'cat': 'SHA256', 'is_ilike': False},
+    'sha1':       {'col': 'SHA1 Hash', 'cat': 'SHA1', 'is_ilike': False},
+    'ip':         {'col': 'sourceIP', 'cat': 'IP', 'is_ilike': False},
+    'file':       {'col': 'Filename', 'cat': 'FileArtifacts', 'is_ilike': False},
+    'filename':   {'col': 'Filename', 'cat': 'FileArtifacts', 'is_ilike': False}
 }
+
+VALID_MAIL_TYPES = ['mailsender', 'subject', 'url', 'domain', 'fqdn']
 
 def get_chunks(conditions, limit=2023):
     chunks = []
@@ -42,20 +50,19 @@ if uploaded_file:
         if not line or ',' not in line: continue
         parts = [x.strip().lower() for x in line.rsplit(',', 1)]
         
-        # --- IGNORE FILTER ---
-        # Only add to indicators if the label is in our VALID_MAIL_TYPES list
-        if len(parts) == 2 and parts[1] in VALID_MAIL_TYPES:
-            indicators[parts[1]].append(parts[0])
+        # Apply filter only if checkbox is checked
+        if len(parts) == 2:
+            label = parts[1]
+            if mail_only and label not in VALID_MAIL_TYPES:
+                continue
+            indicators[label].append(parts[0])
 
     domain_filter = ' WHERE "domainId"=\'3\' AND ' if client == "Tarshid" else ' WHERE '
 
-    st.subheader(f"Generated Mail Queries for {client}")
+    st.subheader(f"Generated Queries for {client}")
 
-    if not indicators:
-        st.info("No valid mail-related IOCs found in the file.")
-    
     for label, vals in indicators.items():
-        conf = CONFIG.get(label)
+        conf = CONFIG.get(label, {'col': label, 'cat': label.upper(), 'is_ilike': False})
         
         with st.expander(f"{label.upper()} ({len(vals)} items)"):
             if conf['is_ilike']:
@@ -63,3 +70,6 @@ if uploaded_file:
                 for i, chunk in enumerate(get_chunks(conds)):
                     st.write(f"**Query Part {i+1}**")
                     st.code(f"SELECT 'IOC-HUNT-{conf['cat']}' AS 'Category', QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"{conf['col']}\" AS '{conf['col']}' FROM events {domain_filter} ({chunk}) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
+            else:
+                joined_vals = ",".join([f"'{v}'" for v in vals])
+                st.code(f"SELECT 'IOC-HUNT-{conf['cat']}' AS 'Category', QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"{conf['col']}\" AS '{conf['col']}' FROM events {domain_filter} (\"{conf['col']}\" IN ({joined_vals})) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
