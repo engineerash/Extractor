@@ -4,14 +4,11 @@ from collections import defaultdict
 st.set_page_config(page_title="Multi-Client IOC Generator", layout="wide")
 st.title("🛡️ SOC Hunting: Multi-Client AQL Generator")
 
+# 1. Client Selection
 client = st.selectbox("Select Client", ["Tarshid", "Alraedah"])
 uploaded_file = st.file_uploader("Upload your IOC file (Format: value,label)", type=['csv', 'txt'])
 
 # --- DYNAMIC MAPPING CONFIGURATION ---
-# Add any new labels here. 
-# 'col': The field name in the database
-# 'cat': The category name for the 'IOC-HUNT-' string
-# 'is_ilike': True for string search, False for IN list search
 CONFIG = {
     'domain': {'col': 'URL HOST', 'cat': 'Domain', 'is_ilike': True},
     'fqdn':   {'col': 'URL HOST', 'cat': 'Domain', 'is_ilike': True},
@@ -23,7 +20,8 @@ CONFIG = {
     'sha1':       {'col': 'SHA1 Hash', 'cat': 'SHA1', 'is_ilike': False},
     'ip':         {'col': 'sourceIP', 'cat': 'IP', 'is_ilike': False},
     'file':       {'col': 'Filename', 'cat': 'FileArtifacts', 'is_ilike': False},
-    'filename':   {'col': 'Filename', 'cat': 'FileArtifacts', 'is_ilike': False}
+    'filename':   {'col': 'Filename', 'cat': 'FileArtifacts', 'is_ilike': False},
+    'fileartifacts': {'col': 'Filename', 'cat': 'FileArtifacts', 'is_ilike': False}
 }
 
 def get_chunks(conditions, limit=2023):
@@ -44,23 +42,28 @@ def get_chunks(conditions, limit=2023):
 if uploaded_file:
     content = uploaded_file.read().decode("utf-8")
     indicators = defaultdict(list)
+    
+    # --- FIXED PARSING LOGIC ---
     for line in content.strip().split('\n'):
         if not line or ',' not in line: continue
-        parts = [x.strip().lower() for x in line.split(',', 1)]
-        indicators[parts[1]].append(parts[0])
+        # rsplit handles lines with internal commas correctly
+        parts = [x.strip().lower() for x in line.rsplit(',', 1)]
+        if len(parts) == 2:
+            indicators[parts[1]].append(parts[0])
 
     domain_filter = ' WHERE "domainId"=\'3\' AND ' if client == "Tarshid" else ' WHERE '
 
     st.subheader(f"Generated Queries for {client}")
 
     for label, vals in indicators.items():
-        # Get config, default to 'other' if not found
+        # Get config, default to generic behavior if label not found
         conf = CONFIG.get(label, {'col': label, 'cat': label.upper(), 'is_ilike': False})
         
         with st.expander(f"{label.upper()} ({len(vals)} items)"):
             if conf['is_ilike']:
                 conds = [f'"{conf["col"]}" ILIKE \'%{v}%\'' for v in vals]
                 for i, chunk in enumerate(get_chunks(conds)):
+                    st.write(f"**Query Part {i+1}**")
                     st.code(f"SELECT 'IOC-HUNT-{conf['cat']}' AS 'Category', QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"{conf['col']}\" AS '{conf['col']}' FROM events {domain_filter} ({chunk}) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
             else:
                 joined_vals = ",".join([f"'{v}'" for v in vals])
