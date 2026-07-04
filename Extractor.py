@@ -1,16 +1,15 @@
 import streamlit as st
 from collections import defaultdict
 
-st.set_page_config(page_title="Multi-Client IOC Generator", layout="wide")
+st.set_page_config(page_title="SOC IOC Generator", layout="wide")
 st.title("🛡️ SOC Hunting: Multi-Client AQL Generator")
 
 # 1. Selection Controls
 client = st.selectbox("Select Client", ["Tarshid", "Alraedah"])
 mail_only = st.checkbox("Enable Mail-Only Mode (Filter out non-mail IOCs)")
-uploaded_file = st.file_uploader("Upload your IOC file", type=['csv', 'txt'])
+uploaded_file = st.file_uploader("Upload your IOC file (value,label)", type=['csv', 'txt'])
 
 # --- DYNAMIC MAPPING CONFIGURATION ---
-# All types are here now
 CONFIG = {
     'domain': {'col': 'URL HOST', 'cat': 'Domain', 'is_ilike': True},
     'fqdn':   {'col': 'URL HOST', 'cat': 'Domain', 'is_ilike': True},
@@ -22,7 +21,8 @@ CONFIG = {
     'sha1':       {'col': 'SHA1 Hash', 'cat': 'SHA1', 'is_ilike': False},
     'ip':         {'col': 'sourceIP', 'cat': 'IP', 'is_ilike': False},
     'file':       {'col': 'Filename', 'cat': 'FileArtifacts', 'is_ilike': False},
-    'filename':   {'col': 'Filename', 'cat': 'FileArtifacts', 'is_ilike': False}
+    'filename':   {'col': 'Filename', 'cat': 'FileArtifacts', 'is_ilike': False},
+    'fileartifacts': {'col': 'Filename', 'cat': 'FileArtifacts', 'is_ilike': False}
 }
 
 VALID_MAIL_TYPES = ['mailsender', 'subject', 'url', 'domain', 'fqdn']
@@ -48,21 +48,26 @@ if uploaded_file:
     
     for line in content.strip().split('\n'):
         if not line or ',' not in line: continue
+        # Robust parsing: handles commas inside indicator values
         parts = [x.strip().lower() for x in line.rsplit(',', 1)]
         
-        # Apply filter only if checkbox is checked
         if len(parts) == 2:
-            label = parts[1]
+            label, val = parts[1], parts[0]
+            # Filter: Skip if mail_only is ON and label is not in whitelist
             if mail_only and label not in VALID_MAIL_TYPES:
                 continue
-            indicators[label].append(parts[0])
+            indicators[label].append(val)
 
     domain_filter = ' WHERE "domainId"=\'3\' AND ' if client == "Tarshid" else ' WHERE '
 
     st.subheader(f"Generated Queries for {client}")
 
     for label, vals in indicators.items():
-        conf = CONFIG.get(label, {'col': label, 'cat': label.upper(), 'is_ilike': False})
+        # STRICT FILTER: Ignore any labels not defined in CONFIG
+        if label not in CONFIG:
+            continue
+            
+        conf = CONFIG[label]
         
         with st.expander(f"{label.upper()} ({len(vals)} items)"):
             if conf['is_ilike']:
