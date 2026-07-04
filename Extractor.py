@@ -6,10 +6,10 @@ st.title("🛡️ SOC Hunting: Multi-Client AQL Generator")
 
 # 1. Selection Controls
 client = st.selectbox("Select Client", ["Tarshid", "Alraedah"])
-mail_only = st.checkbox("Enable Mail-Only Mode (Filter out non-mail IOCs)")
 uploaded_file = st.file_uploader("Upload your IOC file (value,label)", type=['csv', 'txt'])
 
 # --- DYNAMIC MAPPING CONFIGURATION ---
+# Add or remove types here to control what is processed
 CONFIG = {
     'domain': {'col': 'URL HOST', 'cat': 'Domain', 'is_ilike': True},
     'fqdn':   {'col': 'URL HOST', 'cat': 'Domain', 'is_ilike': True},
@@ -24,8 +24,6 @@ CONFIG = {
     'filename':   {'col': 'Filename', 'cat': 'FileArtifacts', 'is_ilike': False},
     'fileartifacts': {'col': 'Filename', 'cat': 'FileArtifacts', 'is_ilike': False}
 }
-
-VALID_MAIL_TYPES = ['mailsender', 'subject', 'url', 'domain', 'fqdn']
 
 def get_chunks(conditions, limit=2023):
     chunks = []
@@ -48,25 +46,23 @@ if uploaded_file:
     
     for line in content.strip().split('\n'):
         if not line or ',' not in line: continue
-        # Robust parsing: handles commas inside indicator values
+        # Robust parsing: handles commas inside indicator values using rsplit
         parts = [x.strip().lower() for x in line.rsplit(',', 1)]
         
         if len(parts) == 2:
             label, val = parts[1], parts[0]
-            # Filter: Skip if mail_only is ON and label is not in whitelist
-            if mail_only and label not in VALID_MAIL_TYPES:
-                continue
-            indicators[label].append(val)
+            # STRICT FILTER: Only add to indicators if the label is in our CONFIG
+            if label in CONFIG:
+                indicators[label].append(val)
 
     domain_filter = ' WHERE "domainId"=\'3\' AND ' if client == "Tarshid" else ' WHERE '
 
     st.subheader(f"Generated Queries for {client}")
 
+    if not indicators:
+        st.info("No valid IOCs found in the file.")
+    
     for label, vals in indicators.items():
-        # STRICT FILTER: Ignore any labels not defined in CONFIG
-        if label not in CONFIG:
-            continue
-            
         conf = CONFIG[label]
         
         with st.expander(f"{label.upper()} ({len(vals)} items)"):
