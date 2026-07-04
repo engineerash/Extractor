@@ -1,64 +1,63 @@
 import streamlit as st
 from collections import defaultdict
 
-st.set_page_config(page_title="IOC to AQL Generator", layout="wide")
-st.title("🛡️ SOC Hunting: Type-Based AQL Generator")
+st.set_page_config(page_title="Multi-Client IOC Generator", layout="wide")
+st.title("🛡️ SOC Hunting: Multi-Client AQL Generator")
 
-uploaded_file = st.file_uploader("Upload your IOC file (CSV/TXT)", type=['csv', 'txt'])
+client = st.selectbox("Select Client", ["Tarshid", "Alraedah"])
+uploaded_file = st.file_uploader("Upload your IOC file (Format: value,label)", type=['csv', 'txt'])
+
+def get_chunks(conditions, limit=2023):
+    chunks = []
+    current_chunk = []
+    current_length = 0
+    for cond in conditions:
+        if current_length + len(cond) + 4 > limit and current_chunk:
+            chunks.append(" OR ".join(current_chunk))
+            current_chunk = []
+            current_length = 0
+        current_chunk.append(cond)
+        current_length += len(cond) + 4
+    if current_chunk:
+        chunks.append(" OR ".join(current_chunk))
+    return chunks
 
 if uploaded_file:
     content = uploaded_file.read().decode("utf-8")
-    
-    # 1. Group indicators by type
-    grouped_indicators = defaultdict(list)
+    indicators = defaultdict(list)
     for line in content.strip().split('\n'):
         if not line or ',' not in line: continue
-        val, label = [x.strip().lower() for x in line.split(',', 1)]
+        val, label = [x.strip() for x in line.split(',', 1)]
+        indicators[label.lower()].append(val)
+
+    # Configuration per client
+    domain_filter = ' WHERE "domainId"=\'3\' AND ' if client == "Tarshid" else ' WHERE '
+
+    st.subheader(f"Generated Queries for {client}")
+
+    for label, vals in indicators.items():
+        st.write(f"### {label.upper()}")
         
-        # Normalize labels
-        mapping = {
-            'fqdn': 'domain', 'domain': 'domain',
-            'ip': 'ip', 'ip address': 'ip',
-            'url': 'url',
-            'md5': 'md5', 'sha1': 'sha1', 'sha256': 'sha256',
-            'filename': 'filename', 'file': 'filename'
-        }
-        category = mapping.get(label, 'other')
-        if category != 'other':
-            grouped_indicators[category].append(val)
-
-    # 2. Define Query Templates for grouped data
-    # We use " OR " to join multiple values for the same type
-    templates = {
-        'domain': 'SELECT QIDNAME(qid) AS "Event Name", "URL HOST" FROM events WHERE "domainId"=\'3\' AND ({query}) LAST 90 DAYS',
-        'ip': 'SELECT QIDNAME(qid) AS "Event Name", "Source IP", "Destination IP" FROM events WHERE "domainId"=\'3\' AND ({query}) LAST 90 DAYS',
-        'url': 'SELECT QIDNAME(qid) AS "Event Name", "URL" FROM events WHERE "domainId"=\'3\' AND ({query}) LAST 90 DAYS',
-        'md5': 'SELECT QIDNAME(qid) AS "Event Name", "MD5 Hash" FROM events WHERE "domainId"=\'3\' AND ({query}) LAST 90 DAYS',
-        'sha1': 'SELECT QIDNAME(qid) AS "Event Name", "SHA1 Hash" FROM events WHERE "domainId"=\'3\' AND ({query}) LAST 90 DAYS',
-        'sha256': 'SELECT QIDNAME(qid) AS "Event Name", "SHA256 Hash" FROM events WHERE "domainId"=\'3\' AND ({query}) LAST 90 DAYS',
-        'filename': 'SELECT QIDNAME(qid) AS "Event Name", "File Name" FROM events WHERE "domainId"=\'3\' AND ({query}) LAST 90 DAYS'
-    }
-
-    st.subheader("Generated Grouped Queries")
-    
-    # 3. Generate one query per category
-    for category, values in grouped_indicators.items():
-        if category in templates:
-            # Create the OR condition string
-            if category == 'domain':
-                conds = [f'"URL HOST" ILIKE \'%{v}%\'' for v in values]
-            elif category == 'ip':
-                conds = [f'"Source IP" = \'{v}\' OR "Destination IP" = \'{v}\'' for v in values]
-            elif category == 'url':
-                conds = [f'"URL" ILIKE \'%{v}%\'' for v in values]
-            elif category == 'filename':
-                conds = [f'"File Name" ILIKE \'%{v}%\'' for v in values]
-            else: # Hashes
-                hash_col = {"md5": "MD5 Hash", "sha1": "SHA1 Hash", "sha256": "SHA256 Hash"}[category]
-                formatted_list = ",".join([f"'{v}'" for v in values])
-                conds = [f'"{hash_col}" IN ({formatted_list})']
+        # Mapping labels to your specific Alraedah/General syntax requirements
+        if label in ['url', 'domain', 'mailsender', 'subject']:
+            col_map = {"url": "URL", "domain": "URL HOST", "mailsender": "sender", "subject": "subject"}
+            cat_map = {"url": "URL", "domain": "Domain", "mailsender": "MailSender", "subject": "MailSubject"}
+            col_name = col_map[label]
             
-            # Combine conditions and display
-            full_query = templates[category].format(query=" OR ".join(conds))
-            with st.expander(f"Search for all {category.upper()}s ({len(values)} items)"):
-                st.code(full_query, language="sql")
+            conds = [f'"{col_name}" ILIKE \'%{v}%\'' for v in vals]
+            chunks = get_chunks(conds)
+            for i, chunk in enumerate(chunks):
+                query = f"SELECT 'IOC-HUNT-{cat_map[label]}' AS 'Category', QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"{col_name}\" AS '{col_name}' FROM events {domain_filter} ({chunk}) ORDER BY \"startTime\" DESC LAST 90 DAYS"
+                with st.expander(f"{label.upper()} Query Part {i+1}"):
+                    st.code(query, language="sql")
+        
+        elif label in ['md5', 'sha256', 'ip', 'fileartifacts']:
+            # Handling the complex FileArtifacts sample provided
+            if label == 'fileartifacts':
+                query = f"SELECT 'IOC-HUNT-FileArtifacts' AS 'Category', QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"Filename\" AS 'File Name', \"File Directory\" AS 'File Directory' FROM events {domain_filter} (\"Filename\" IN ({','.join([f"'{v}'" for v in vals])})) ORDER BY \"startTime\" DESC LAST 90 DAYS"
+                st.code(query, language="sql")
+            else:
+                col_name = {"md5": "MD5 Hash", "sha256": "SHA256 Hash", "ip": "sourceIP"}[label]
+                joined_vals = ",".join([f"'{v}'" for v in vals])
+                query = f"SELECT 'IOC-HUNT-{label.upper()}' AS 'Category', QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"{col_name}\" AS '{label.upper()}' FROM events {domain_filter} (\"{col_name}\" IN ({joined_vals})) ORDER BY \"startTime\" DESC LAST 90 DAYS"
+                st.code(query, language="sql")
