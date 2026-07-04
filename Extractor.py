@@ -10,6 +10,8 @@ client = st.selectbox("Select Client", ["Tarshid", "Alraedah"])
 uploaded_file = st.file_uploader("Upload your IOC file (value,label)", type=['csv', 'txt'])
 
 file_basename = os.path.splitext(uploaded_file.name)[0] if uploaded_file else "UNKNOWN"
+# This dynamically sets the reference set name based on your file
+ref_set_name = f"{file_basename}_Hashes"
 
 CONFIG = {
     'domain': {'col': 'URL HOST', 'cat': 'Domain', 'is_ilike': True, 'can_ref_set': False},
@@ -48,24 +50,22 @@ def get_chunks(vals, conf, base_query, limit=2023):
 if uploaded_file:
     content = uploaded_file.read().decode("utf-8")
     indicators = defaultdict(list)
-    all_hashes = [] # Store all hashes here for consolidated export
+    all_hashes = [] 
     
     for line in content.strip().split('\n'):
         if not line or ',' not in line: continue
         parts = [x.strip().lower() for x in line.rsplit(',', 1)]
         if len(parts) == 2 and parts[1] in CONFIG:
             indicators[parts[1]].append(parts[0])
-            # Collect hashes for the master export
             if parts[1] in ['md5', 'sha256', 'sha1']:
                 all_hashes.append(parts[0])
 
-    # --- MASTER HASH EXPORT BUTTON ---
     if all_hashes:
         df_hashes = pd.DataFrame(all_hashes, columns=['Hash'])
         st.sidebar.download_button(
-            label="📥 Export ALL Hashes (CSV)",
+            label=f"📥 Export {ref_set_name}.csv",
             data=df_hashes.to_csv(index=False),
-            file_name="Threat_Advisory_Hashes.csv",
+            file_name=f"{ref_set_name}.csv",
             mime="text/csv"
         )
 
@@ -80,8 +80,8 @@ if uploaded_file:
         with st.expander(f"{label.upper()} ({len(vals)} items)"):
             result = get_chunks(vals, conf, base_query)
             if result == "REF_SET":
-                st.info("Query length exceeded. Use the Reference Set.")
-                st.code(f"{base_query} (\"{conf['col']}\" IN REFERENCE_SET('Threat_Advisory_Hashes')) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
+                st.info(f"Query too long. Using Reference Set: {ref_set_name}")
+                st.code(f"{base_query} (\"{conf['col']}\" IN REFERENCE_SET('{ref_set_name}')) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
             else:
                 for i, chunk in enumerate(result):
                     if conf['is_ilike']:
