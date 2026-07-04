@@ -5,7 +5,26 @@ st.set_page_config(page_title="Multi-Client IOC Generator", layout="wide")
 st.title("🛡️ SOC Hunting: Multi-Client AQL Generator")
 
 client = st.selectbox("Select Client", ["Tarshid", "Alraedah"])
-uploaded_file = st.file_uploader("Upload your IOC file", type=['csv', 'txt'])
+uploaded_file = st.file_uploader("Upload your IOC file (Format: value,label)", type=['csv', 'txt'])
+
+# --- DYNAMIC MAPPING CONFIGURATION ---
+# Add any new labels here. 
+# 'col': The field name in the database
+# 'cat': The category name for the 'IOC-HUNT-' string
+# 'is_ilike': True for string search, False for IN list search
+CONFIG = {
+    'domain': {'col': 'URL HOST', 'cat': 'Domain', 'is_ilike': True},
+    'fqdn':   {'col': 'URL HOST', 'cat': 'Domain', 'is_ilike': True},
+    'url':    {'col': 'URL', 'cat': 'URL', 'is_ilike': True},
+    'mailsender': {'col': 'sender', 'cat': 'MailSender', 'is_ilike': True},
+    'subject':    {'col': 'subject', 'cat': 'MailSubject', 'is_ilike': True},
+    'md5':        {'col': 'MD5 Hash', 'cat': 'MD5', 'is_ilike': False},
+    'sha256':     {'col': 'SHA256 Hash', 'cat': 'SHA256', 'is_ilike': False},
+    'sha1':       {'col': 'SHA1 Hash', 'cat': 'SHA1', 'is_ilike': False},
+    'ip':         {'col': 'sourceIP', 'cat': 'IP', 'is_ilike': False},
+    'file':       {'col': 'Filename', 'cat': 'FileArtifacts', 'is_ilike': False},
+    'filename':   {'col': 'Filename', 'cat': 'FileArtifacts', 'is_ilike': False}
+}
 
 def get_chunks(conditions, limit=2023):
     chunks = []
@@ -27,40 +46,22 @@ if uploaded_file:
     indicators = defaultdict(list)
     for line in content.strip().split('\n'):
         if not line or ',' not in line: continue
-        val, label = [x.strip().lower() for x in line.split(',', 1)]
-        indicators[label].append(val)
+        parts = [x.strip().lower() for x in line.split(',', 1)]
+        indicators[parts[1]].append(parts[0])
 
     domain_filter = ' WHERE "domainId"=\'3\' AND ' if client == "Tarshid" else ' WHERE '
 
     st.subheader(f"Generated Queries for {client}")
 
     for label, vals in indicators.items():
-        count = len(vals)
-        # Clean the header for the expander
-        with st.expander(f"{label.upper()} ({count} items)"):
-            
-            # --- LOGIC FOR ILIKE TYPES ---
-            if label in ['url', 'domain', 'mailsender', 'subject']:
-                col_map = {"url": "URL", "domain": "URL HOST", "mailsender": "sender", "subject": "subject"}
-                cat_map = {"url": "URL", "domain": "Domain", "mailsender": "MailSender", "subject": "MailSubject"}
-                col = col_map[label]
-                
-                conds = [f'"{col}" ILIKE \'%{v}%\'' for v in vals]
+        # Get config, default to 'other' if not found
+        conf = CONFIG.get(label, {'col': label, 'cat': label.upper(), 'is_ilike': False})
+        
+        with st.expander(f"{label.upper()} ({len(vals)} items)"):
+            if conf['is_ilike']:
+                conds = [f'"{conf["col"]}" ILIKE \'%{v}%\'' for v in vals]
                 for i, chunk in enumerate(get_chunks(conds)):
-                    st.code(f"SELECT 'IOC-HUNT-{cat_map[label]}' AS 'Category', QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"{col}\" FROM events {domain_filter} ({chunk}) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
-            
-            # --- LOGIC FOR IN TYPES ---
-            elif label in ['md5', 'sha256', 'sha1', 'ip', 'file', 'fileartifacts']:
-                col_map = {
-                    "md5": "MD5 Hash", "sha256": "SHA256 Hash", "sha1": "SHA1 Hash", 
-                    "ip": "sourceIP", "file": "Filename", "fileartifacts": "Filename"
-                }
-                col = col_map.get(label, "Filename")
-                # Ensure the field is treated as a list
-                joined_vals = ",".join([f"'{v}'" for v in vals])
-                
-                query = f"SELECT 'IOC-HUNT-{label.upper()}' AS 'Category', QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"{col}\" FROM events {domain_filter} (\"{col}\" IN ({joined_vals})) ORDER BY \"startTime\" DESC LAST 90 DAYS"
-                st.code(query, language="sql")
-            
+                    st.code(f"SELECT 'IOC-HUNT-{conf['cat']}' AS 'Category', QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"{conf['col']}\" AS '{conf['col']}' FROM events {domain_filter} ({chunk}) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
             else:
-                st.warning(f"No AQL template found for label: {label}")
+                joined_vals = ",".join([f"'{v}'" for v in vals])
+                st.code(f"SELECT 'IOC-HUNT-{conf['cat']}' AS 'Category', QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"{conf['col']}\" AS '{conf['col']}' FROM events {domain_filter} (\"{conf['col']}\" IN ({joined_vals})) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
