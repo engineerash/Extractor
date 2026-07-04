@@ -1,5 +1,6 @@
 import streamlit as st
 from collections import defaultdict
+import os
 
 st.set_page_config(page_title="SOC IOC Generator", layout="wide")
 st.title("🛡️ SOC Hunting: Multi-Client AQL Generator")
@@ -8,8 +9,10 @@ st.title("🛡️ SOC Hunting: Multi-Client AQL Generator")
 client = st.selectbox("Select Client", ["Tarshid", "Alraedah"])
 uploaded_file = st.file_uploader("Upload your IOC file (value,label)", type=['csv', 'txt'])
 
+# Extract filename without extension for use in the query
+file_basename = os.path.splitext(uploaded_file.name)[0] if uploaded_file else "UNKNOWN"
+
 # --- DYNAMIC MAPPING CONFIGURATION ---
-# Add or remove types here to control what is processed
 CONFIG = {
     'domain': {'col': 'URL HOST', 'cat': 'Domain', 'is_ilike': True},
     'fqdn':   {'col': 'URL HOST', 'cat': 'Domain', 'is_ilike': True},
@@ -46,12 +49,9 @@ if uploaded_file:
     
     for line in content.strip().split('\n'):
         if not line or ',' not in line: continue
-        # Robust parsing: handles commas inside indicator values using rsplit
         parts = [x.strip().lower() for x in line.rsplit(',', 1)]
-        
         if len(parts) == 2:
             label, val = parts[1], parts[0]
-            # STRICT FILTER: Only add to indicators if the label is in our CONFIG
             if label in CONFIG:
                 indicators[label].append(val)
 
@@ -59,18 +59,17 @@ if uploaded_file:
 
     st.subheader(f"Generated Queries for {client}")
 
-    if not indicators:
-        st.info("No valid IOCs found in the file.")
-    
     for label, vals in indicators.items():
         conf = CONFIG[label]
+        # Construct the Scan Name: filename-HUNT-Category
+        scan_name = f"{file_basename}-HUNT-{conf['cat']}"
         
         with st.expander(f"{label.upper()} ({len(vals)} items)"):
             if conf['is_ilike']:
                 conds = [f'"{conf["col"]}" ILIKE \'%{v}%\'' for v in vals]
                 for i, chunk in enumerate(get_chunks(conds)):
                     st.write(f"**Query Part {i+1}**")
-                    st.code(f"SELECT 'IOC-HUNT-{conf['cat']}' AS 'Category', QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"{conf['col']}\" AS '{conf['col']}' FROM events {domain_filter} ({chunk}) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
+                    st.code(f"SELECT '{scan_name}' AS 'Scan Name', QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"{conf['col']}\" AS '{conf['col']}' FROM events {domain_filter} ({chunk}) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
             else:
                 joined_vals = ",".join([f"'{v}'" for v in vals])
-                st.code(f"SELECT 'IOC-HUNT-{conf['cat']}' AS 'Category', QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"{conf['col']}\" AS '{conf['col']}' FROM events {domain_filter} (\"{conf['col']}\" IN ({joined_vals})) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
+                st.code(f"SELECT '{scan_name}' AS 'Scan Name', QIDNAME(qid) AS 'Event Name', logsourcename(logSourceId) AS 'Log Source', DATEFORMAT(\"startTime\",'yyyy-MM-dd HH:mm:ss') AS 'Time', \"{conf['col']}\" AS '{conf['col']}' FROM events {domain_filter} (\"{conf['col']}\" IN ({joined_vals})) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
