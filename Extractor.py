@@ -31,19 +31,15 @@ def get_chunks(vals, conf, base_query, limit=2023):
         full_cond = " OR ".join([f'"{conf["col"]}" ILIKE \'%{v}%\'' for v in vals])
     else:
         full_cond = f'("{conf["col"]}" IN ({",".join([f"\'{v}\'" for v in vals])}))'
-    
     if len(base_query) + len(full_cond) <= limit: return [vals]
     if conf['can_ref_set']: return "REF_SET"
-        
-    chunks = []
-    current_chunk = []
-    current_length = len(base_query)
+    
+    chunks, current_chunk, current_length = [], [], len(base_query)
     for v in vals:
         cond = f' OR "{conf["col"]}" ILIKE \'%{v}%\'' if conf['is_ilike'] else f"'{v}',"
         if current_length + len(cond) > limit and current_chunk:
             chunks.append(current_chunk)
-            current_chunk = []
-            current_length = len(base_query)
+            current_chunk, current_length = [], len(base_query)
         current_chunk.append(v)
         current_length += len(cond)
     if current_chunk: chunks.append(current_chunk)
@@ -52,11 +48,26 @@ def get_chunks(vals, conf, base_query, limit=2023):
 if uploaded_file:
     content = uploaded_file.read().decode("utf-8")
     indicators = defaultdict(list)
+    all_hashes = [] # Store all hashes here for consolidated export
+    
     for line in content.strip().split('\n'):
         if not line or ',' not in line: continue
         parts = [x.strip().lower() for x in line.rsplit(',', 1)]
         if len(parts) == 2 and parts[1] in CONFIG:
             indicators[parts[1]].append(parts[0])
+            # Collect hashes for the master export
+            if parts[1] in ['md5', 'sha256', 'sha1']:
+                all_hashes.append(parts[0])
+
+    # --- MASTER HASH EXPORT BUTTON ---
+    if all_hashes:
+        df_hashes = pd.DataFrame(all_hashes, columns=['Hash'])
+        st.sidebar.download_button(
+            label="📥 Export ALL Hashes (CSV)",
+            data=df_hashes.to_csv(index=False),
+            file_name="Threat_Advisory_Hashes.csv",
+            mime="text/csv"
+        )
 
     domain_filter = ' WHERE "domainId"=\'3\' AND ' if client == "Tarshid" else ' WHERE '
     st.subheader(f"Generated Queries for {client}")
@@ -68,19 +79,9 @@ if uploaded_file:
         
         with st.expander(f"{label.upper()} ({len(vals)} items)"):
             result = get_chunks(vals, conf, base_query)
-            
             if result == "REF_SET":
-                st.info("Query too long. Using Reference Set instead.")
-                st.code(f"{base_query} (\"{conf['col']}\" IN REFERENCE_SET('ThreatIntel_{conf['cat']}')) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
-                
-                # --- EXPORT BUTTON ---
-                df = pd.DataFrame(vals, columns=['Value'])
-                st.download_button(
-                    label=f"📥 Export {label.upper()} to CSV for Reference Set",
-                    data=df.to_csv(index=False),
-                    file_name=f"{conf['cat']}_refset.csv",
-                    mime="text/csv"
-                )
+                st.info("Query length exceeded. Use the Reference Set.")
+                st.code(f"{base_query} (\"{conf['col']}\" IN REFERENCE_SET('Threat_Advisory_Hashes')) ORDER BY \"startTime\" DESC LAST 90 DAYS", language="sql")
             else:
                 for i, chunk in enumerate(result):
                     if conf['is_ilike']:
